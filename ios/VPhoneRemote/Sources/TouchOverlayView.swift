@@ -81,16 +81,16 @@ final class TouchOverlayUIView: UIView {
 
         if homeArmed { return }
 
-        // With Guided Access on, iOS isn't competing for the bottom edge, and
-        // the guest now receives real IOHIDEvents that SpringBoard's own
-        // recognisers accept -- so the swipe is handed over untouched and the
-        // guest runs its genuine interactive home/switcher animation. The key
-        // press below is the fallback for when iOS would steal the gesture.
-        if UIAccessibility.isGuidedAccessEnabled {
-            emit(latency: oldestTimestamp(touches))
-            return
-        }
-
+        // Forwarding the swipe to the guest and letting SpringBoard recognise
+        // it natively does not work, and can't be made to: injected HID events
+        // reach apps (taps, scrolling, pinch, lock-screen unlock all work) but
+        // never reach the system gesture recognisers, which sit upstream of
+        // where a HID client can inject. Verified by sweeping every digitizer
+        // event mask and both the synthetic and the guest's real touchscreen
+        // sender ID -- the real one isn't even delivered. So the swipe is
+        // translated into a key press here regardless of Guided Access; what
+        // Guided Access still buys us is the one-finger gesture, since iOS
+        // stops claiming the bottom edge for itself.
         if detectHomeGesture() {
             homeArmed = true
             // Release the fingers on the guest: they were a command to us, not
