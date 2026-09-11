@@ -1,25 +1,29 @@
 import SwiftUI
 import UIKit
 
-/// Raw UIKit touch handling, replacing SwiftUI's DragGesture/MagnifyGesture.
+/// Raw UIKit touch handling, forwarding every finger to the guest.
 ///
-/// Three reasons this exists:
-///  - Latency: SwiftUI's gesture system arbitrates between recognizers before
-///    delivering a value. `touchesBegan/Moved/Ended` fire as soon as UIKit has
-///    the event, which is the shortest path from glass to socket.
+/// Three reasons this exists rather than SwiftUI gestures:
+///  - Latency: SwiftUI arbitrates between recognizers before delivering a
+///    value. `touchesBegan/Moved/Ended` fire as soon as UIKit has the event.
 ///  - Measurement: UITouch carries a `timestamp` on the same clock as
-///    `systemUptime`, so we can report the true glass-to-handler delay rather
-///    than inferring it.
-///  - Real multitouch: every finger arrives with its own identity, so pinch is
-///    actual two-finger tracking instead of synthesizing symmetric points
-///    around an anchor from a scale factor.
+///    `systemUptime`, so the glass-to-handler delay can be measured.
+///  - Real multitouch: every finger arrives with its own identity, instead of
+///    a scale factor that has to be reverse-engineered into finger positions.
 final class TouchOverlayUIView: UIView {
     var connection: ConnectionManager?
 
-    /// Stable per-finger index for the host's multi-touch protocol. UITouch
-    /// instances are the identity UIKit gives us; they're reused, so slots are
-    /// freed on end/cancel.
-    private var touchSlots: [ObjectIdentifier: Int] = [:]
+    private struct Tracked {
+        let slot: Int
+        var location: CGPoint
+        var phase: String
+    }
+
+    /// Every finger currently down. UIKit hands us only the touches that
+    /// *changed* in a given event, but a multitouch frame has to describe all
+    /// active contacts -- sending a partial set makes the guest see the
+    /// untouched fingers lift and land again, which breaks pinch outright.
+    private var active: [ObjectIdentifier: Tracked] = [:]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -31,59 +35,88 @@ final class TouchOverlayUIView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(touches, phase: "down")
+        for touch in touches {
+            active[ObjectIdentifier(touch)] = Tracked(
+                slot: nextFreeSlot(), location: touch.location(in: self), phase: "down"
+            )
+        }
+        emit(latency: oldestTimestamp(touches))
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(touches, phase: "move")
+        for touch in touches {
+            let key = ObjectIdentifier(touch)
+            guard var tracked = active[key] else { continue }
+            tracked.location = touch.location(in: self)
+            tracked.phase = "move"
+            active[key] = tracked
+        }
+        emit(latency: oldestTimestamp(touches))
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        send(touches, phase: "up")
-        release(touches)
+        lift(touches)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Must still release, or the guest is left with a finger pressed down.
-        send(touches, phase: "up")
-        release(touches)
+        // Must still lift, or the guest keeps a finger pressed forever.
+        lift(touches)
     }
 
-    private func slot(for touch: UITouch) -> Int {
-        let key = ObjectIdentifier(touch)
-        if let existing = touchSlots[key] { return existing }
-        let used = Set(touchSlots.values)
-        var index = 0
-        while used.contains(index) { index += 1 }
-        touchSlots[key] = index
-        return index
-    }
-
-    private func release(_ touches: Set<UITouch>) {
-        for touch in touches { touchSlots.removeValue(forKey: ObjectIdentifier(touch)) }
-    }
-
-    private func send(_ touches: Set<UITouch>, phase: String) {
-        guard let connection else { return }
-
-        var payload: [(id: Int, phase: String, x: CGFloat, y: CGFloat)] = []
-        var oldestTimestamp = Double.greatestFiniteMagnitude
-
+    private func lift(_ touches: Set<UITouch>) {
         for touch in touches {
-            let location = touch.location(in: self)
-            let mapped = Self.mapToVM(location, viewSize: bounds.size, screen: connection.screenSize)
-            payload.append((id: slot(for: touch), phase: phase, x: mapped.x, y: mapped.y))
-            oldestTimestamp = min(oldestTimestamp, touch.timestamp)
+            let key = ObjectIdentifier(touch)
+            guard var tracked = active[key] else { continue }
+            tracked.location = touch.location(in: self)
+            tracked.phase = "up"
+            active[key] = tracked
         }
-        guard !payload.isEmpty else { return }
+        emit(latency: oldestTimestamp(touches))
+        for touch in touches { active.removeValue(forKey: ObjectIdentifier(touch)) }
+    }
 
-        // Glass-to-handler delay: how long UIKit took to deliver this event.
-        if oldestTimestamp < .greatestFiniteMagnitude {
-            let delayMs = (ProcessInfo.processInfo.systemUptime - oldestTimestamp) * 1000
+    private func nextFreeSlot() -> Int {
+        let used = Set(active.values.map(\.slot))
+        var slot = 0
+        while used.contains(slot) { slot += 1 }
+        return slot
+    }
+
+    private func oldestTimestamp(_ touches: Set<UITouch>) -> Double? {
+        touches.map(\.timestamp).min()
+    }
+
+    /// Sends the complete state of every finger, not just the changed ones.
+    private func emit(latency touchTimestamp: Double?) {
+        guard let connection, !active.isEmpty else { return }
+
+        let payload = active.values
+            .sorted { $0.slot < $1.slot }
+            .map { tracked -> (id: Int, phase: String, x: CGFloat, y: CGFloat) in
+                let mapped = Self.mapToVM(
+                    tracked.location, viewSize: bounds.size, screen: connection.screenSize
+                )
+                return (id: tracked.slot, phase: tracked.phase, x: mapped.x, y: mapped.y)
+            }
+
+        if let touchTimestamp {
+            let delayMs = (ProcessInfo.processInfo.systemUptime - touchTimestamp) * 1000
             connection.reportInputLatency(delayMs)
         }
 
-        connection.multiTouch(payload, isMove: phase == "move")
+        // Only rate-limit frames where every finger is merely moving: a frame
+        // carrying a down or up changes which contacts exist and can't be
+        // dropped. Because each frame is now complete state rather than a
+        // delta, dropping a move frame loses nothing but an intermediate
+        // position.
+        let allMoving = payload.allSatisfy { $0.phase == "move" }
+        connection.multiTouch(payload, isMove: allMoving)
+
+        // A finger reported as "down" is continuing from the next frame on.
+        for (key, var tracked) in active where tracked.phase == "down" {
+            tracked.phase = "move"
+            active[key] = tracked
+        }
     }
 
     /// Matches the aspect-fit letterbox of the video layer beneath this overlay.

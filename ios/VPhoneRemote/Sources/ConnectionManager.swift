@@ -347,13 +347,12 @@ final class ConnectionManager: NSObject, ObservableObject {
               "ts": Date().timeIntervalSince1970 * 1000])
     }
 
-    /// SwiftUI can fire drag updates faster than there's any point sending --
-    /// cap outgoing "move" events to ~90Hz, last-value-wins (no rescheduling:
-    /// the very next onChanged, milliseconds later, carries the newer position
-    /// anyway, and touchUp/pinch-end always send unconditionally so the final
-    /// position is never dropped).
+    /// Caps outgoing "move" frames. Matched to the touch digitizer's sampling
+    /// rate rather than below it: pinch is judged on the relative positions of
+    /// two fingers, so under-sampling shows up as jerky zooming. Frames
+    /// carrying a down or up are never throttled.
     private var lastMoveSentAt: CFAbsoluteTime = 0
-    private let minMoveInterval: CFAbsoluteTime = 1.0 / 90.0
+    private let minMoveInterval: CFAbsoluteTime = 1.0 / 120.0
 
     private func throttledMove(_ body: () -> Void) {
         let now = CFAbsoluteTimeGetCurrent()

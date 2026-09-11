@@ -3,105 +3,119 @@ import SwiftUI
 struct RemoteScreenView: View {
     @EnvironmentObject var connection: ConnectionManager
     @State private var keyboardActive = false
-    @State private var showStats = false
+    @State private var showControls = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // The guest screen gets its own space rather than sitting under the
-            // controls: at the VM's aspect ratio there's no letterbox to hide
-            // buttons in, so overlaying them covered real content.
-            GeometryReader { geo in
-                ZStack {
-                    Color.black
+        GeometryReader { geo in
+            ZStack {
+                Color.black
 
-                    if connection.isVideoActive {
-                        VideoDisplayView(connection: connection)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                    } else if let image = connection.latestImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                    } else {
-                        ProgressView("Connecting to virtual phone…")
-                            .tint(.white)
-                            .foregroundStyle(.white)
-                    }
-
-                    TouchOverlay(connection: connection)
+                if connection.isVideoActive {
+                    VideoDisplayView(connection: connection)
                         .frame(width: geo.size.width, height: geo.size.height)
-
-                    if showStats {
-                        VStack {
-                            HStack {
-                                Spacer()
-                                statsReadout
-                            }
-                            Spacer()
-                        }
-                        .padding(8)
-                        .allowsHitTesting(false)
-                    }
+                } else if let image = connection.latestImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                } else {
+                    ProgressView("Connecting to virtual phone…")
+                        .tint(.white)
+                        .foregroundStyle(.white)
                 }
-            }
 
-            controlBar
+                TouchOverlay(connection: connection)
+                    .frame(width: geo.size.width, height: geo.size.height)
+
+                overlay
+            }
         }
+        .ignoresSafeArea()
         .background(Color.black)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        // The guest is itself an iPhone, so its own gestures should reach it:
+        // a swipe up from the bottom is the guest's home gesture, not ours.
+        // Without this iOS swallows that edge for its own app switcher.
+        .defersSystemGestures(on: .bottom)
         .onDisappear { connection.stopStreaming() }
         .overlay {
-            // Zero-sized: it exists only to own the keyboard and receive keystrokes.
-            KeyboardInput(isActive: $keyboardActive, connection: connection)
-                .frame(width: 0, height: 0)
+            // Zero-sized hosts: one owns the keyboard and receives keystrokes,
+            // the other redirects the phone's volume buttons to the guest.
+            ZStack {
+                KeyboardInput(isActive: $keyboardActive, connection: connection)
+                VolumeButtonBridge(connection: connection)
+            }
+            .frame(width: 0, height: 0)
+        }
+    }
+
+    /// Everything the guest can't do for itself, kept out of the way: a single
+    /// dot until tapped. Home and lock are deliberately absent -- the guest
+    /// handles those through its own gestures and hardware behaviour.
+    private var overlay: some View {
+        VStack {
+            HStack(alignment: .top) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { showControls.toggle() }
+                } label: {
+                    Image(systemName: showControls ? "xmark" : "ellipsis")
+                        .font(.footnote.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(.black.opacity(showControls ? 0.55 : 0.25), in: Circle())
+                }
+
+                if showControls {
+                    controls
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+
+                Spacer()
+
+                if showControls { statsReadout }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+
+            Spacer()
+        }
+    }
+
+    /// Volume stays here too: interception needs an audio session that iOS can
+    /// refuse, so there has to be a way to work without it.
+    private var controls: some View {
+        HStack(spacing: 8) {
+            controlButton("speaker.wave.1.fill") { connection.pressKey(.voldown) }
+            controlButton("speaker.wave.3.fill") { connection.pressKey(.volup) }
+            controlButton(keyboardActive ? "keyboard.chevron.compact.down" : "keyboard") {
+                keyboardActive.toggle()
+            }
+            controlButton("xmark.circle") { connection.disconnect() }
+        }
+    }
+
+    private func controlButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.footnote)
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(.black.opacity(0.55), in: Circle())
         }
     }
 
     private var statsReadout: some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        VStack(alignment: .trailing, spacing: 1) {
             Text("net \(Int(connection.networkRTT))ms")
-            Text("touch \(Int(connection.touchRTT))ms")
             Text("input \(Int(connection.inputLatency))ms")
             Text("video \(Int(connection.videoLatency))ms")
             Text(connection.isUsingUDP ? "udp" : "tcp")
         }
-        .font(.caption2.monospacedDigit())
+        .font(.system(size: 9).monospacedDigit())
         .foregroundStyle(.white)
-        .padding(6)
-        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private var controlBar: some View {
-        HStack(spacing: 14) {
-            barButton("xmark") { connection.disconnect() }
-            keyButton("lock.fill", .power)
-            keyButton("house.fill", .home)
-            keyButton("speaker.wave.1.fill", .voldown)
-            keyButton("speaker.wave.3.fill", .volup)
-            barButton(keyboardActive ? "keyboard.chevron.compact.down" : "keyboard") {
-                keyboardActive.toggle()
-            }
-            barButton("chart.bar") { showStats.toggle() }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
-        .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
-    }
-
-    private func barButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3)
-                .frame(width: 40, height: 40)
-                .background(.thinMaterial, in: Circle())
-        }
-        .foregroundStyle(.white)
-    }
-
-    private func keyButton(_ systemImage: String, _ key: HardwareKey) -> some View {
-        barButton(systemImage) { connection.pressKey(key) }
+        .padding(5)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+        .allowsHitTesting(false)
     }
 }
