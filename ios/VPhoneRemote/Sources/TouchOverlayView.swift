@@ -81,6 +81,16 @@ final class TouchOverlayUIView: UIView {
 
         if homeArmed { return }
 
+        // With Guided Access on, iOS isn't competing for the bottom edge, and
+        // the guest now receives real IOHIDEvents that SpringBoard's own
+        // recognisers accept -- so the swipe is handed over untouched and the
+        // guest runs its genuine interactive home/switcher animation. The key
+        // press below is the fallback for when iOS would steal the gesture.
+        if UIAccessibility.isGuidedAccessEnabled {
+            emit(latency: oldestTimestamp(touches))
+            return
+        }
+
         if detectHomeGesture() {
             homeArmed = true
             // Release the fingers on the guest: they were a command to us, not
