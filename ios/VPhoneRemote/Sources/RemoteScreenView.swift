@@ -28,7 +28,10 @@ struct RemoteScreenView: View {
                 TouchOverlay(connection: connection)
                     .frame(width: geo.size.width, height: geo.size.height)
 
-                overlay
+                // Video and touches deliberately cover the whole screen, so
+                // the safe area has to be reapplied here by hand -- otherwise
+                // the controls sit under the notch and the rounded corners.
+                overlay(insets: geo.safeAreaInsets)
             }
         }
         .ignoresSafeArea()
@@ -59,7 +62,7 @@ struct RemoteScreenView: View {
     /// Everything the guest can't do for itself, kept out of the way: a single
     /// dot until tapped. Home and lock are deliberately absent -- the guest
     /// handles those through its own gestures and hardware behaviour.
-    private var overlay: some View {
+    private func overlay(insets: EdgeInsets) -> some View {
         VStack {
             HStack(alignment: .top) {
                 // Home is the one control reached for constantly, so it gets
@@ -92,8 +95,9 @@ struct RemoteScreenView: View {
 
                 if showControls { statsReadout }
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.leading, max(insets.leading, 10))
+            .padding(.trailing, max(insets.trailing, 10))
+            .padding(.top, max(insets.top, 6))
 
             Spacer()
         }
