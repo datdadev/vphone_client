@@ -62,15 +62,26 @@ struct RemoteScreenView: View {
     private var overlay: some View {
         VStack {
             HStack(alignment: .top) {
-                Button {
-                    withAnimation(.easeOut(duration: 0.15)) { showControls.toggle() }
-                } label: {
-                    Image(systemName: showControls ? "xmark" : "ellipsis")
-                        .font(.footnote.bold())
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(.black.opacity(showControls ? 0.55 : 0.25), in: Circle())
-                }
+                // Home is the one control reached for constantly, so it gets
+                // the always-visible button rather than being two taps deep.
+                // The rest stay behind a long press: a menu toggle here would
+                // put the common case behind the rare one.
+                Image(systemName: showControls ? "xmark" : "house.fill")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(.black.opacity(showControls ? 0.55 : 0.25), in: Circle())
+                    .contentShape(Circle())
+                    .onTapGesture {
+                        if showControls {
+                            withAnimation(.easeOut(duration: 0.15)) { showControls = false }
+                        } else {
+                            connection.pressKey(.home)
+                        }
+                    }
+                    .onLongPressGesture(minimumDuration: 0.35) {
+                        withAnimation(.easeOut(duration: 0.15)) { showControls.toggle() }
+                    }
 
                 if showControls {
                     controls
@@ -92,7 +103,6 @@ struct RemoteScreenView: View {
     /// refuse, so there has to be a way to work without it.
     private var controls: some View {
         HStack(spacing: 8) {
-            controlButton("house.fill") { connection.pressKey(.home) }
             controlButton("square.on.square") { connection.pressKey(.appSwitcher) }
             controlButton("speaker.wave.1.fill") { connection.pressKey(.voldown) }
             controlButton("speaker.wave.3.fill") { connection.pressKey(.volup) }
