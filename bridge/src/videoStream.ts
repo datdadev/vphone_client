@@ -85,9 +85,11 @@ export function startVideoStream(
           console.log("[video] transport: UDP");
           lastTransport = "udp";
         }
+        // Host framing is [type:1][captureMs:8][sequence:4]; UDP carries its
+        // own header, so strip all 13 bytes. Stripping only 9 left the stray
+        // sequence bytes prefixed to the HEVC data, corrupting every frame.
         const captureMs = payload.length >= 9 ? Number(payload.readBigUInt64BE(1)) : Date.now();
-        // The host's own framing is stripped; UDP carries its own header.
-        udp.server.send(udp.sessionId, payload.subarray(9), frameSeq, frameType, captureMs);
+        udp.server.send(udp.sessionId, payload.subarray(13), frameSeq, frameType, captureMs);
         continue;
       }
 
