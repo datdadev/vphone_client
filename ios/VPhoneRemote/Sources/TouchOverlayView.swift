@@ -25,6 +25,18 @@ final class TouchOverlayUIView: UIView {
     /// untouched fingers lift and land again, which breaks pinch outright.
     private var active: [ObjectIdentifier: Tracked] = [:]
 
+    /// Where each finger started, for recognising the home gesture.
+    private var startLocations: [ObjectIdentifier: CGPoint] = [:]
+    /// One home per gesture, however far the fingers keep travelling.
+    private var homeSent = false
+
+    /// Two fingers, because iOS claims *single*-finger swipes from the bottom
+    /// edge for its own home gesture and backgrounds the app before the guest
+    /// ever sees them. Multi-finger edge swipes it ignores, so this is the one
+    /// shape of "swipe up from the bottom" that can actually reach the VM.
+    private static let homeStartZone: CGFloat = 160
+    private static let homeTravel: CGFloat = 70
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
@@ -36,9 +48,11 @@ final class TouchOverlayUIView: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
+            let location = touch.location(in: self)
             active[ObjectIdentifier(touch)] = Tracked(
-                slot: nextFreeSlot(), location: touch.location(in: self), phase: "down"
+                slot: nextFreeSlot(), location: location, phase: "down"
             )
+            startLocations[ObjectIdentifier(touch)] = location
         }
         emit(latency: oldestTimestamp(touches))
     }
@@ -51,7 +65,41 @@ final class TouchOverlayUIView: UIView {
             tracked.phase = "move"
             active[key] = tracked
         }
+
+        if !homeSent, detectHomeGesture() {
+            homeSent = true
+            connection?.pressKey(.home)
+            // Release the fingers on the guest: they were a command to us, not
+            // a drag for it, and leaving them down would scroll whatever is
+            // underneath.
+            liftAllOnGuest()
+            return
+        }
+
         emit(latency: oldestTimestamp(touches))
+    }
+
+    /// Two fingers that both began near the bottom and travelled upward.
+    private func detectHomeGesture() -> Bool {
+        guard active.count >= 2 else { return false }
+        let height = bounds.height
+        guard height > 0 else { return false }
+
+        for (key, tracked) in active {
+            guard let start = startLocations[key] else { return false }
+            guard start.y > height - Self.homeStartZone else { return false }
+            guard start.y - tracked.location.y > Self.homeTravel else { return false }
+        }
+        return true
+    }
+
+    private func liftAllOnGuest() {
+        guard let connection, !active.isEmpty else { return }
+        let payload = active.values.sorted { $0.slot < $1.slot }.map { tracked in
+            let mapped = Self.mapToVM(tracked.location, viewSize: bounds.size, screen: connection.screenSize)
+            return (id: tracked.slot, phase: "up", x: mapped.x, y: mapped.y)
+        }
+        connection.multiTouch(payload)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -71,8 +119,13 @@ final class TouchOverlayUIView: UIView {
             tracked.phase = "up"
             active[key] = tracked
         }
-        emit(latency: oldestTimestamp(touches))
-        for touch in touches { active.removeValue(forKey: ObjectIdentifier(touch)) }
+        // A consumed home gesture already released these on the guest.
+        if !homeSent { emit(latency: oldestTimestamp(touches)) }
+        for touch in touches {
+            active.removeValue(forKey: ObjectIdentifier(touch))
+            startLocations.removeValue(forKey: ObjectIdentifier(touch))
+        }
+        if active.isEmpty { homeSent = false }
     }
 
     private func nextFreeSlot() -> Int {

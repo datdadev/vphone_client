@@ -86,6 +86,7 @@ struct RemoteScreenView: View {
     /// refuse, so there has to be a way to work without it.
     private var controls: some View {
         HStack(spacing: 8) {
+            controlButton("house.fill") { connection.pressKey(.home) }
             controlButton("speaker.wave.1.fill") { connection.pressKey(.voldown) }
             controlButton("speaker.wave.3.fill") { connection.pressKey(.volup) }
             controlButton(keyboardActive ? "keyboard.chevron.compact.down" : "keyboard") {
