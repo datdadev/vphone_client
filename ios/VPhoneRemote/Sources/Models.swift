@@ -36,4 +36,6 @@ struct VMInfo: Decodable {
 
 enum HardwareKey: String {
     case home, power, volup, voldown
+    /// iOS has no app-switcher key; the host synthesises it as a double Home.
+    case appSwitcher = "appswitcher"
 }

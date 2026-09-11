@@ -27,8 +27,14 @@ final class TouchOverlayUIView: UIView {
 
     /// Where each finger started, for recognising the home gesture.
     private var startLocations: [ObjectIdentifier: CGPoint] = [:]
-    /// One home per gesture, however far the fingers keep travelling.
-    private var homeSent = false
+    /// Recognised the edge swipe; which command it becomes depends on whether
+    /// the finger lifts or dwells, mirroring how iOS distinguishes home from
+    /// the app switcher.
+    private var homeArmed = false
+    private var gestureConsumed = false
+    private var dwellWork: DispatchWorkItem?
+    /// How long the finger must stay down after the swipe to mean "switcher".
+    private static let switcherDwell: TimeInterval = 0.35
 
     /// Guided Access stops iOS claiming the bottom edge, so the real one-finger
     /// swipe up reaches the app and can be used exactly as on a real phone.
@@ -73,13 +79,24 @@ final class TouchOverlayUIView: UIView {
             active[key] = tracked
         }
 
-        if !homeSent, detectHomeGesture() {
-            homeSent = true
-            connection?.pressKey(.home)
+        if homeArmed { return }
+
+        if detectHomeGesture() {
+            homeArmed = true
             // Release the fingers on the guest: they were a command to us, not
             // a drag for it, and leaving them down would scroll whatever is
             // underneath.
             liftAllOnGuest()
+
+            // Lifting soon means home; holding means the app switcher. The
+            // decision has to wait, so nothing is sent yet.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.homeArmed, !self.gestureConsumed else { return }
+                self.gestureConsumed = true
+                self.connection?.pressKey(.appSwitcher)
+            }
+            dwellWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.switcherDwell, execute: work)
             return
         }
 
@@ -134,13 +151,27 @@ final class TouchOverlayUIView: UIView {
             tracked.phase = "up"
             active[key] = tracked
         }
-        // A consumed home gesture already released these on the guest.
-        if !homeSent { emit(latency: oldestTimestamp(touches)) }
+        if homeArmed {
+            // Lifted before the dwell elapsed: that's home, not the switcher.
+            if !gestureConsumed {
+                gestureConsumed = true
+                dwellWork?.cancel()
+                connection?.pressKey(.home)
+            }
+        } else {
+            emit(latency: oldestTimestamp(touches))
+        }
+
         for touch in touches {
             active.removeValue(forKey: ObjectIdentifier(touch))
             startLocations.removeValue(forKey: ObjectIdentifier(touch))
         }
-        if active.isEmpty { homeSent = false }
+        if active.isEmpty {
+            homeArmed = false
+            gestureConsumed = false
+            dwellWork?.cancel()
+            dwellWork = nil
+        }
     }
 
     private func nextFreeSlot() -> Int {
