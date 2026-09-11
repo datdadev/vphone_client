@@ -7,7 +7,7 @@ import { startVideoStream } from "./videoStream.js";
 const config = loadConfig();
 
 const RAW_SOCKET_COMMANDS = new Set([
-  "screenshot", "tap", "swipe", "key", "type", "typeText",
+  "screenshot", "tap", "swipe", "key", "type", "typeText", "requestKeyFrame",
   // Live single-finger drag and simultaneous multi-finger (pinch) primitives.
   "touch", "multiTouch",
 ]);

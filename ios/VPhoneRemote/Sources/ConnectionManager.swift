@@ -105,6 +105,9 @@ final class ConnectionManager: NSObject, ObservableObject {
     /// UI barely changes between frames and interframe compression exploits that.
     func startVideo() {
         videoPipeline.reset()
+        videoPipeline.onNeedKeyFrame = { [weak self] in
+            DispatchQueue.main.async { self?.requestKeyFrame() }
+        }
         videoPipeline.onVideoLatency = { [weak self] ms in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -360,6 +363,15 @@ final class ConnectionManager: NSObject, ObservableObject {
     /// setClipboard, which only stages text for a manual paste.
     func typeText(_ text: String) {
         send(["t": "typeText", "text": text])
+    }
+
+    /// Rate-limited: a burst of dropped frames would otherwise fire one request
+    /// per lost frame, and a keyframe is expensive.
+    private var lastKeyFrameRequest: Date = .distantPast
+    func requestKeyFrame() {
+        guard Date().timeIntervalSince(lastKeyFrameRequest) > 0.25 else { return }
+        lastKeyFrameRequest = Date()
+        send(["t": "requestKeyFrame"])
     }
 
     func typeBackspace() {

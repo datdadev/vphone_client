@@ -23,18 +23,37 @@ final class VideoDecoder {
     var onSampleBuffer: ((CMSampleBuffer) -> Void)?
     /// Host capture time of the most recent frame (ms since epoch).
     var onCaptureTimestamp: ((UInt64) -> Void)?
+    /// Frames went missing downstream -- the decoder now has no valid reference
+    /// and needs a keyframe, or the picture stays frozen until the next
+    /// periodic one.
+    var onFrameGap: (() -> Void)?
+
+    private var lastSequence: UInt32?
 
     func handlePacket(_ data: Data) {
-        // [1-byte type][8-byte BE capture ms][payload]
-        guard data.count > 9, let first = data.first,
+        // [1-byte type][8-byte BE capture ms][4-byte BE sequence][payload]
+        guard data.count > 13, let first = data.first,
               let type = PacketType(rawValue: first)
         else { return }
 
-        let captureMs = data[(data.startIndex + 1)..<(data.startIndex + 9)]
+        let base = data.startIndex
+        let captureMs = data[(base + 1)..<(base + 9)]
             .reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        let sequence = data[(base + 9)..<(base + 13)]
+            .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         onCaptureTimestamp?(captureMs)
 
-        let payload = Data(data[(data.startIndex + 9)...])
+        if type != .parameterSets {
+            if let last = lastSequence, sequence != last &+ 1, sequence > last {
+                // Something upstream dropped frames. Decoding onward from here
+                // produces artefacts, so wait for a keyframe and ask for one.
+                awaitingKeyFrame = true
+                onFrameGap?()
+            }
+            lastSequence = sequence
+        }
+
+        let payload = Data(data[(base + 13)...])
 
         switch type {
         case .parameterSets:
@@ -49,6 +68,7 @@ final class VideoDecoder {
     func reset() {
         formatDescription = nil
         awaitingKeyFrame = true
+        lastSequence = nil
     }
 
     /// `[1-byte count][ per set: 4-byte BE length + bytes ]`

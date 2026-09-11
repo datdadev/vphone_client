@@ -22,6 +22,8 @@ final class VideoPipeline: @unchecked Sendable {
     var onStillImage: ((UIImage) -> Void)?
     /// Reports measured end-to-end video latency (capture -> about to display).
     var onVideoLatency: ((Double) -> Void)?
+    /// Frames were lost; the host needs to send a keyframe to resync.
+    var onNeedKeyFrame: (() -> Void)?
 
     /// Frames queued for decode. Unbounded async enqueueing is a latency trap:
     /// if decode falls behind even slightly, the backlog grows forever and the
@@ -35,6 +37,9 @@ final class VideoPipeline: @unchecked Sendable {
             guard let self else { return }
             let nowMs = Date().timeIntervalSince1970 * 1000
             self.onVideoLatency?(nowMs - Double(captureMs))
+        }
+        decoder.onFrameGap = { [weak self] in
+            self?.onNeedKeyFrame?()
         }
         decoder.onSampleBuffer = { [weak self] sampleBuffer in
             guard let self else { return }
