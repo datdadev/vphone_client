@@ -7,7 +7,7 @@ import { startVideoStream } from "./videoStream.js";
 const config = loadConfig();
 
 const RAW_SOCKET_COMMANDS = new Set([
-  "screenshot", "tap", "swipe", "key", "type", "typeText", "requestKeyFrame",
+  "screenshot", "tap", "swipe", "key", "type", "typeText", "requestKeyFrame", "setBitrate",
   // Live single-finger drag and simultaneous multi-finger (pinch) primitives.
   "touch", "multiTouch",
 ]);
@@ -82,7 +82,7 @@ wss.on("connection", (ws, req) => {
 
       if (type === "videoStream") {
         videoSocket?.destroy();
-        videoSocket = startVideoStream(ws, socketPathFor(config, vmName), msg);
+        videoSocket = startVideoStream(ws, socketPathFor(config, vmName), msg, vmName);
         return;
       }
 

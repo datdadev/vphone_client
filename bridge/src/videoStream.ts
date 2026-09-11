@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from "node:net";
 import type { WebSocket } from "ws";
+import { CongestionControl } from "./congestionControl.js";
 
 /**
  * Bridges the host's HEVC video stream to a WebSocket client.
@@ -16,19 +17,33 @@ const MAX_BUFFERED_BYTES = 48 * 1024;
 export function startVideoStream(
   ws: WebSocket,
   socketPath: string,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  vmName: string
 ): Socket {
   const socket = createConnection(socketPath);
   let buffer = Buffer.alloc(0);
   let handshakeDone = false;
   let dropped = 0;
 
+  const requestedBitrate = typeof request.bitrate === "number" ? request.bitrate : 12_000_000;
+  const congestion = new CongestionControl(socketPath, vmName, {
+    min: 1_000_000,
+    max: requestedBitrate,
+    start: requestedBitrate,
+    backlogBytes: MAX_BUFFERED_BYTES,
+  });
+
   const reportTimer = setInterval(() => {
-    if (dropped > 0) {
-      console.log(`[video] dropped ${dropped} frames to client backpressure`);
+    void congestion.tick(ws, dropped).then((changed) => {
+      if (changed !== null) {
+        console.log(
+          `[video] bitrate -> ${(changed / 1e6).toFixed(1)}Mbps` +
+            (dropped > 0 ? ` (dropped ${dropped})` : "")
+        );
+      }
       dropped = 0;
-    }
-  }, 5000);
+    });
+  }, 1000);
 
   socket.on("connect", () => {
     socket.setNoDelay(true);
