@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RemoteScreenView: View {
     @EnvironmentObject var connection: ConnectionManager
@@ -31,7 +32,7 @@ struct RemoteScreenView: View {
                 // Video and touches deliberately cover the whole screen, so
                 // the safe area has to be reapplied here by hand -- otherwise
                 // the controls sit under the notch and the rounded corners.
-                overlay(insets: geo.safeAreaInsets)
+                overlay
             }
         }
         .ignoresSafeArea()
@@ -62,7 +63,25 @@ struct RemoteScreenView: View {
     /// Everything the guest can't do for itself, kept out of the way: a single
     /// dot until tapped. Home and lock are deliberately absent -- the guest
     /// handles those through its own gestures and hardware behaviour.
-    private func overlay(insets: EdgeInsets) -> some View {
+    /// The window's own safe area. `geo.safeAreaInsets` reports zero here --
+    /// the whole hierarchy ignores the safe area so the video can run edge to
+    /// edge -- so it has to be read from UIKit instead.
+    private static var windowSafeArea: UIEdgeInsets {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        return scene?.windows.first { $0.isKeyWindow }?.safeAreaInsets
+            ?? scene?.windows.first?.safeAreaInsets
+            ?? .zero
+    }
+
+    /// Clearance for the display's rounded corners. The safe area does not
+    /// cover this: in portrait the leading inset is zero, so a button pinned
+    /// to the top left still lands inside the curve.
+    private static let cornerClearance: CGFloat = 22
+
+    private var overlay: some View {
         VStack {
             HStack(alignment: .top) {
                 // Home is the one control reached for constantly, so it gets
@@ -95,9 +114,11 @@ struct RemoteScreenView: View {
 
                 if showControls { statsReadout }
             }
-            .padding(.leading, max(insets.leading, 10))
-            .padding(.trailing, max(insets.trailing, 10))
-            .padding(.top, max(insets.top, 6))
+            .padding(.leading, Self.windowSafeArea.left + Self.cornerClearance)
+            .padding(.trailing, Self.windowSafeArea.right + Self.cornerClearance)
+            // Floored, because hiding the status bar can report a top inset of
+            // zero, which would drop the button straight back into the curve.
+            .padding(.top, max(Self.windowSafeArea.top, 16) + 8)
 
             Spacer()
         }
