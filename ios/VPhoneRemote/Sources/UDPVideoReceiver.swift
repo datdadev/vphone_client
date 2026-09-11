@@ -96,15 +96,22 @@ final class UDPVideoReceiver {
         }
     }
 
+    private static let helloPrefix = Data("VPHONE1".utf8)
+
     private func handle(datagram: Data) {
-        // The bridge echoes our hello back to confirm the path.
-        if datagram.count < Self.headerBytes {
-            if !sawTraffic, datagram.starts(with: Data("VPHONE1".utf8)) {
+        // The bridge echoes our hello back to confirm the path. Identify it by
+        // prefix, never by length: a hello is longer than the video header, so
+        // a length check parses it as a frame, and its leading bytes ("VPHO")
+        // read as sequence 1448101967 -- which then rejects every real frame
+        // as stale and freezes the picture permanently.
+        if datagram.starts(with: Self.helloPrefix) {
+            if !sawTraffic {
                 sawTraffic = true
                 onActive?()
             }
             return
         }
+        guard datagram.count >= Self.headerBytes else { return }
 
         let base = datagram.startIndex
         func u16(_ offset: Int) -> Int {

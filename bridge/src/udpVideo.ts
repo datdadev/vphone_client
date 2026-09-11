@@ -49,7 +49,9 @@ export class UdpVideoServer {
       port: remote.port,
       lastSeen: Date.now(),
     });
-    // Echo so the client knows the path works and can stop falling back.
+    // Echo so the client knows the path works and can stop falling back. The
+    // client filters these by their "VPHONE1" prefix -- video packets never
+    // start with it.
     this.socket?.send(message, remote.port, remote.address);
   }
 
