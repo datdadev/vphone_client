@@ -1,6 +1,8 @@
 import { createConnection, type Socket } from "node:net";
 import type { WebSocket } from "ws";
 import { CongestionControl } from "./congestionControl.js";
+import type { UdpVideoServer } from "./udpVideo.js";
+import { FrameType, type FrameTypeValue } from "./videoPackets.js";
 
 /**
  * Bridges the host's HEVC video stream to a WebSocket client.
@@ -18,12 +20,15 @@ export function startVideoStream(
   ws: WebSocket,
   socketPath: string,
   request: Record<string, unknown>,
-  vmName: string
+  vmName: string,
+  udp?: { server: UdpVideoServer; sessionId: string }
 ): Socket {
   const socket = createConnection(socketPath);
   let buffer = Buffer.alloc(0);
   let handshakeDone = false;
   let dropped = 0;
+  let frameSeq = 0;
+  let lastTransport: "udp" | "ws" | null = null;
 
   const requestedBitrate = typeof request.bitrate === "number" ? request.bitrate : 12_000_000;
   const congestion = new CongestionControl(socketPath, vmName, {
@@ -69,11 +74,33 @@ export function startVideoStream(
       const payload = buffer.subarray(4, 4 + length);
       buffer = buffer.subarray(4 + length);
 
+      const frameType = (payload.length > 0 ? payload[0] : 3) as FrameTypeValue;
+      frameSeq++;
+
+      // Prefer UDP: a lost packet there is a hole FEC usually fills, where on
+      // TCP it stalls everything behind it while it retransmits data that's
+      // already stale by the time it lands.
+      if (udp?.server.isActive(udp.sessionId)) {
+        if (lastTransport !== "udp") {
+          console.log("[video] transport: UDP");
+          lastTransport = "udp";
+        }
+        const captureMs = payload.length >= 9 ? Number(payload.readBigUInt64BE(1)) : Date.now();
+        // The host's own framing is stripped; UDP carries its own header.
+        udp.server.send(udp.sessionId, payload.subarray(9), frameSeq, frameType, captureMs);
+        continue;
+      }
+
+      if (lastTransport !== "ws") {
+        console.log("[video] transport: WebSocket" + (udp ? " (UDP unavailable)" : ""));
+        lastTransport = "ws";
+      }
+
       // Backpressure toward the phone. Without this, frames the client can't
       // drain pile up in the socket's send buffer: the picture stays smooth but
       // drifts steadily into the past. Delta frames are droppable; parameter
       // sets and keyframes are not, since losing them breaks decoding.
-      const isDroppable = payload.length > 0 && payload[0] === 3;
+      const isDroppable = frameType === FrameType.deltaFrame;
       if (isDroppable && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
         dropped++;
         continue;

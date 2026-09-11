@@ -3,6 +3,7 @@ import { loadConfig, socketPathFor } from "./config.js";
 import { listVMs, vmInfo } from "./vphoneCli.js";
 import { sendVPhoneCommand } from "./vphoneSocket.js";
 import { startVideoStream } from "./videoStream.js";
+import { UdpVideoServer } from "./udpVideo.js";
 
 const config = loadConfig();
 
@@ -17,7 +18,13 @@ const RAW_SOCKET_COMMANDS = new Set([
 // for no size win.
 const wss = new WebSocketServer({ port: config.port, perMessageDeflate: false });
 
+// Video moves over UDP when the client can reach it; the port is the control
+// port + 1 so only one number has to be configured.
+const udpServer = new UdpVideoServer(config.port + 1);
+udpServer.start();
+
 console.log(`[bridge] listening on ws://0.0.0.0:${config.port}`);
+console.log(`[bridge] udp video on ${config.port + 1}`);
 console.log(`[bridge] default VM: ${config.vmName}`);
 console.log(`[bridge] token: ${config.token}`);
 
@@ -40,6 +47,7 @@ wss.on("connection", (ws, req) => {
   // Held open for the life of this WS connection; closing it tells the host to
   // drop this subscriber (and stop encoding when the last one leaves).
   let videoSocket: import("node:net").Socket | undefined;
+  let udpSessionId: string | undefined;
   let lastInputAt = 0;
 
   ws.on("message", async (raw) => {
@@ -82,7 +90,12 @@ wss.on("connection", (ws, req) => {
 
       if (type === "videoStream") {
         videoSocket?.destroy();
-        videoSocket = startVideoStream(ws, socketPathFor(config, vmName), msg, vmName);
+        const sessionId = typeof msg.udpSession === "string" ? msg.udpSession : undefined;
+        videoSocket = startVideoStream(
+          ws, socketPathFor(config, vmName), msg, vmName,
+          sessionId ? { server: udpServer, sessionId } : undefined
+        );
+        if (sessionId) udpSessionId = sessionId;
         return;
       }
 
@@ -121,6 +134,7 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     videoSocket?.destroy();
     videoSocket = undefined;
+    if (udpSessionId) udpServer.forget(udpSessionId);
     console.log("[bridge] client disconnected");
   });
 });

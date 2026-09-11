@@ -64,6 +64,7 @@ struct RemoteScreenView: View {
             Text("touch \(Int(connection.touchRTT))ms")
             Text("input \(Int(connection.inputLatency))ms")
             Text("video \(Int(connection.videoLatency))ms")
+            Text(connection.isUsingUDP ? "udp" : "tcp")
         }
         .font(.caption2.monospacedDigit())
         .foregroundStyle(.white)

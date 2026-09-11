@@ -51,6 +51,11 @@ final class ConnectionManager: NSObject, ObservableObject {
     /// 60fps would thrash SwiftUI's diffing for no benefit).
     let videoPipeline = VideoPipeline()
     @Published var isVideoActive = false
+    /// True once video is arriving over UDP rather than the WebSocket fallback.
+    @Published var isUsingUDP = false
+
+    private var udpReceiver: UDPVideoReceiver?
+    private let udpSessionId = UUID().uuidString
 
     /// Live diagnostics so latency questions get answered with numbers instead
     /// of guesses: networkRTT is phone<->bridge only (no VM work), touchRTT is
@@ -80,6 +85,9 @@ final class ConnectionManager: NSObject, ObservableObject {
         pingTimer?.invalidate()
         pingTimer = nil
         reconnectWorkItem?.cancel()
+        udpReceiver?.stop()
+        udpReceiver = nil
+        isUsingUDP = false
         controlTask?.cancel(with: .goingAway, reason: nil)
         videoTask?.cancel(with: .goingAway, reason: nil)
         controlTask = nil
@@ -105,6 +113,7 @@ final class ConnectionManager: NSObject, ObservableObject {
     /// UI barely changes between frames and interframe compression exploits that.
     func startVideo() {
         videoPipeline.reset()
+        startUDPReceiver()
         videoPipeline.onNeedKeyFrame = { [weak self] in
             DispatchQueue.main.async { self?.requestKeyFrame() }
         }
@@ -119,12 +128,42 @@ final class ConnectionManager: NSObject, ObservableObject {
             self.latestImage = image
             if self.isStreaming { self.requestScreenshot() }
         }
-        sendOnVideo(["t": "videoStream", "fps": videoFrameRate, "scale": videoScale, "bitrate": videoBitRate])
+        sendOnVideo([
+            "t": "videoStream", "fps": videoFrameRate, "scale": videoScale,
+            "bitrate": videoBitRate, "udpSession": udpSessionId,
+        ])
     }
 
     func reportInputLatency(_ ms: Double) {
         // Smoothed: per-event values are noisy, the trend is what matters.
         inputLatency = inputLatency == 0 ? ms : (inputLatency * 0.8 + ms * 0.2)
+    }
+
+    /// Video prefers UDP; the bridge keeps using the WebSocket until our hellos
+    /// start arriving, so a network that blocks UDP degrades instead of failing.
+    private func startUDPReceiver() {
+        udpReceiver?.stop()
+        let receiver = UDPVideoReceiver(sessionId: udpSessionId)
+        receiver.onActive = { [weak self] in
+            DispatchQueue.main.async { self?.isUsingUDP = true }
+        }
+        receiver.onFrame = { [weak self] type, captureMs, sequence, payload in
+            // Rebuild the framing the decoder expects, matching the WS path.
+            // The real sequence is passed through so the decoder's own gap
+            // detection still works as a second line of defence behind the
+            // receiver's reassembly timeout.
+            guard let self else { return }
+            var packet = Data([type])
+            withUnsafeBytes(of: captureMs.bigEndian) { packet.append(contentsOf: $0) }
+            withUnsafeBytes(of: sequence.bigEndian) { packet.append(contentsOf: $0) }
+            packet.append(payload)
+            self.videoPipeline.handleBinary(packet)
+        }
+        receiver.onUnrecoverableLoss = { [weak self] in
+            DispatchQueue.main.async { self?.requestKeyFrame() }
+        }
+        receiver.start(host: host, port: UInt16(port + 1))
+        udpReceiver = receiver
     }
 
     private func sendOnVideo(_ command: [String: Any]) {
