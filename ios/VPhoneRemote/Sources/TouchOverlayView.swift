@@ -30,12 +30,19 @@ final class TouchOverlayUIView: UIView {
     /// One home per gesture, however far the fingers keep travelling.
     private var homeSent = false
 
-    /// Two fingers, because iOS claims *single*-finger swipes from the bottom
-    /// edge for its own home gesture and backgrounds the app before the guest
-    /// ever sees them. Multi-finger edge swipes it ignores, so this is the one
-    /// shape of "swipe up from the bottom" that can actually reach the VM.
-    private static let homeStartZone: CGFloat = 160
-    private static let homeTravel: CGFloat = 70
+    /// Guided Access stops iOS claiming the bottom edge, so the real one-finger
+    /// swipe up reaches the app and can be used exactly as on a real phone.
+    /// The zone is shallow there, matching how iOS reserves only its very
+    /// bottom edge: scrolling a list up from near the bottom is ordinary, and a
+    /// deep zone would fire home constantly.
+    private static let guidedHomeZone: CGFloat = 26
+    private static let guidedHomeTravel: CGFloat = 55
+
+    /// Without Guided Access, iOS takes single-finger edge swipes for itself
+    /// and backgrounds the app before the guest sees anything. Multi-finger
+    /// edge swipes it ignores, so two fingers is the fallback that survives.
+    private static let fallbackHomeZone: CGFloat = 160
+    private static let fallbackHomeTravel: CGFloat = 70
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -79,16 +86,24 @@ final class TouchOverlayUIView: UIView {
         emit(latency: oldestTimestamp(touches))
     }
 
-    /// Two fingers that both began near the bottom and travelled upward.
+    /// A swipe up from the bottom edge. One finger when Guided Access is on
+    /// (iOS isn't competing for that edge), two fingers otherwise.
     private func detectHomeGesture() -> Bool {
-        guard active.count >= 2 else { return false }
         let height = bounds.height
-        guard height > 0 else { return false }
+        guard height > 0, !active.isEmpty else { return false }
+
+        let guided = UIAccessibility.isGuidedAccessEnabled
+        let zone = guided ? Self.guidedHomeZone : Self.fallbackHomeZone
+        let travel = guided ? Self.guidedHomeTravel : Self.fallbackHomeTravel
+
+        // Multi-finger gestures are pinches and pans; only claim them when the
+        // single-finger swipe isn't available to us.
+        guard guided ? active.count == 1 : active.count >= 2 else { return false }
 
         for (key, tracked) in active {
             guard let start = startLocations[key] else { return false }
-            guard start.y > height - Self.homeStartZone else { return false }
-            guard start.y - tracked.location.y > Self.homeTravel else { return false }
+            guard start.y > height - zone else { return false }
+            guard start.y - tracked.location.y > travel else { return false }
         }
         return true
     }

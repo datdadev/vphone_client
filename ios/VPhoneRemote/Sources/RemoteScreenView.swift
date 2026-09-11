@@ -4,6 +4,7 @@ struct RemoteScreenView: View {
     @EnvironmentObject var connection: ConnectionManager
     @State private var keyboardActive = false
     @State private var showControls = false
+    @State private var guidedAccess = UIAccessibility.isGuidedAccessEnabled
 
     var body: some View {
         GeometryReader { geo in
@@ -39,6 +40,11 @@ struct RemoteScreenView: View {
         // Without this iOS swallows that edge for its own app switcher.
         .defersSystemGestures(on: .bottom)
         .onDisappear { connection.stopStreaming() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIAccessibility.guidedAccessStatusDidChangeNotification
+        )) { _ in
+            guidedAccess = UIAccessibility.isGuidedAccessEnabled
+        }
         .overlay {
             // Zero-sized hosts: one owns the keyboard and receives keystrokes,
             // the other redirects the phone's volume buttons to the guest.
@@ -112,6 +118,8 @@ struct RemoteScreenView: View {
             Text("input \(Int(connection.inputLatency))ms")
             Text("video \(Int(connection.videoLatency))ms")
             Text(connection.isUsingUDP ? "udp" : "tcp")
+            // Which home gesture is live right now.
+            Text(guidedAccess ? "home: 1-finger" : "home: 2-finger")
         }
         .font(.system(size: 9).monospacedDigit())
         .foregroundStyle(.white)
