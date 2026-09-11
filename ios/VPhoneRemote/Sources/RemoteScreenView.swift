@@ -29,9 +29,6 @@ struct RemoteScreenView: View {
                 TouchOverlay(connection: connection)
                     .frame(width: geo.size.width, height: geo.size.height)
 
-                // Video and touches deliberately cover the whole screen, so
-                // the safe area has to be reapplied here by hand -- otherwise
-                // the controls sit under the notch and the rounded corners.
                 overlay
             }
         }
@@ -60,9 +57,6 @@ struct RemoteScreenView: View {
         }
     }
 
-    /// Everything the guest can't do for itself, kept out of the way: a single
-    /// dot until tapped. Home and lock are deliberately absent -- the guest
-    /// handles those through its own gestures and hardware behaviour.
     /// The window's own safe area. `geo.safeAreaInsets` reports zero here --
     /// the whole hierarchy ignores the safe area so the video can run edge to
     /// edge -- so it has to be read from UIKit instead.
@@ -79,8 +73,17 @@ struct RemoteScreenView: View {
     /// Clearance for the display's rounded corners. The safe area does not
     /// cover this: in portrait the leading inset is zero, so a button pinned
     /// to the top left still lands inside the curve.
-    private static let cornerClearance: CGFloat = 22
+    ///
+    /// Applied to both axes, and deliberately *not* the safe area's top inset.
+    /// The notch is centred, so a button in the corner never has to clear it --
+    /// insetting by the full notch height only pushed the controls needlessly
+    /// far down the screen. For a ~55pt corner radius the curve admits a point
+    /// at roughly 18pt on the diagonal, so this leaves a little margin.
+    private static let cornerClearance: CGFloat = 20
 
+    /// Everything the guest can't do for itself, kept out of the way behind a
+    /// single button. Video and touches deliberately cover the whole screen,
+    /// so this row has to inset itself -- see `cornerClearance`.
     private var overlay: some View {
         VStack {
             HStack(alignment: .top) {
@@ -116,9 +119,7 @@ struct RemoteScreenView: View {
             }
             .padding(.leading, Self.windowSafeArea.left + Self.cornerClearance)
             .padding(.trailing, Self.windowSafeArea.right + Self.cornerClearance)
-            // Floored, because hiding the status bar can report a top inset of
-            // zero, which would drop the button straight back into the curve.
-            .padding(.top, max(Self.windowSafeArea.top, 16) + 8)
+            .padding(.top, Self.cornerClearance)
 
             Spacer()
         }
