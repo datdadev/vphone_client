@@ -16,6 +16,13 @@ iPhone, over the network.
 
 Setup instructions: [`SETUP.md`](SETUP.md).
 
+## Status
+
+Working end-to-end, built for personal use. No license file yet, no CI, no
+automated tests run in a pipeline (the `bridge/` test files run manually
+against a live bridge — see [`bridge/`](bridge/)). Treat it as a reference
+implementation rather than a polished package.
+
 ## How it performs
 
 Measured end-to-end on a local network:
@@ -46,8 +53,10 @@ These each came out of a specific failure, and are easy to undo by accident:
 - **Video decode never touches the main thread on either end.** SwiftUI gesture
   callbacks and touch injection both need the main thread; running per-frame work
   there put input behind video on both the phone and the Mac.
-- **Touch stays on TCP.** UDP suits video (a late frame is worthless, so drop it),
-  but a dropped `touchUp` strands a finger down on the guest permanently.
+- **Touch stays on TCP** (the WebSocket). Video can move over UDP instead, with
+  its own fragmentation, FEC, and AIMD congestion control in the bridge — a late
+  frame is worthless, so drop it; a dropped `touchUp` strands a finger down on
+  the guest permanently, so that path can't.
 
 ## Diagnostics
 

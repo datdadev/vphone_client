@@ -1,11 +1,20 @@
 # host/vphone-cli — patched fork
 
-A fork of [Lakr233/vphone-cli](https://github.com/Lakr233/vphone-cli) (base commit
-`b86dcaf`) with the changes needed to stream the VM to a phone with low latency.
-Upstream is intact as `origin`, so `git diff` shows exactly what was added.
+A fork of [Lakr233/vphone-cli](https://github.com/Lakr233/vphone-cli) with the
+changes needed to stream the VM to a phone with low latency. It's its own git
+checkout with `origin` still pointing at upstream, so `git diff origin/main`
+shows exactly what this fork added — that's why it's `.gitignore`d from this
+repo rather than nested inside it, and **not included when you clone this repo**.
 
-> The changes are currently **uncommitted** in the working tree. Worth committing
-> on a branch so a stray `git checkout` can't discard them.
+```bash
+git clone --recurse-submodules https://github.com/Lakr233/vphone-cli.git host/vphone-cli
+```
+
+The changes themselves are on a local branch (`vphone-remote`) in the original
+author's working copy, not yet pushed anywhere public. Until that's published,
+reproduce the patch yourself: fork upstream on GitHub, apply the changes
+described below (file by file — none of them are large), commit to a branch,
+and push it.
 
 ## Build & install
 
