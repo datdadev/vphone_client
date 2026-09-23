@@ -67,6 +67,13 @@ final class ConnectionManager: NSObject, ObservableObject {
     @Published var inputLatency: Double = 0
     /// End-to-end video latency: host capture -> ready to display on screen.
     @Published var videoLatency: Double = 0
+    /// Frames arriving per second, and how many of those actually decoded.
+    @Published var arrivedFPS: Int = 0
+    @Published var decodedFPS: Int = 0
+    /// Skipped frame intervals per second, split by where they came from.
+    @Published var sourceHitches: Int = 0
+    @Published var displayHitches: Int = 0
+    @Published var worstGapMs: Int = 0
     private var pingTimer: Timer?
     private var pendingTouchSentAt: Double?
 
@@ -179,6 +186,13 @@ final class ConnectionManager: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.send(["t": "ping", "ts": Date().timeIntervalSince1970 * 1000])
+                // The timer is 1s, so the counts are already per-second.
+                let stats = self.videoPipeline.drainFrameStats()
+                self.arrivedFPS = stats.arrived
+                self.decodedFPS = stats.decoded
+                self.sourceHitches = stats.sourceHitches
+                self.displayHitches = stats.displayHitches
+                self.worstGapMs = stats.worstGapMs
             }
         }
         RunLoop.main.add(timer, forMode: .common)

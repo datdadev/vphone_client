@@ -154,6 +154,12 @@ struct RemoteScreenView: View {
             Text("net \(Int(connection.networkRTT))ms")
             Text("input \(Int(connection.inputLatency))ms")
             Text("video \(Int(connection.videoLatency))ms")
+            // arrived/decoded: a low first number means frames never reached
+            // us, a gap between them means we dropped them to stay current.
+            Text("fps \(connection.arrivedFPS)/\(connection.decodedFPS)")
+            // Skipped intervals: src came from the guest, dsp was added after.
+            Text("hitch \(connection.sourceHitches)/\(connection.displayHitches)")
+            Text("worst \(connection.worstGapMs)ms")
             Text(connection.isUsingUDP ? "udp" : "tcp")
             // Which home gesture is live right now.
             Text(guidedAccess ? "home: 1-finger" : "home: 2-finger")

@@ -32,10 +32,54 @@ final class VideoPipeline: @unchecked Sendable {
     private var _queuedPackets = 0
     private static let maxQueuedPackets = 2
 
+    /// Counted at both ends of the pipeline, because "the picture looks like
+    /// 30fps" doesn't say whether frames are missing before they arrive or
+    /// being dropped here to stay current -- and those have opposite fixes.
+    private var _framesIn = 0
+    private var _framesDecoded = 0
+
+    /// Stutter is about spacing, not count: 60 evenly spaced frames look smooth,
+    /// 60 bunched ones don't. Gaps are measured twice -- between host capture
+    /// times and between our own display calls -- because a gap present in both
+    /// came from the guest, while one that appears only in the second was added
+    /// by the network or by us.
+    private var _pendingCaptureMs: UInt64 = 0
+    private var _lastCaptureMs: UInt64 = 0
+    private var _lastShownMs: Double = 0
+    private var _sourceHitches = 0
+    private var _displayHitches = 0
+    private var _worstGapMs = 0
+    /// Well past the 16.7ms a 60fps frame gets, so only a skipped beat counts.
+    private static let hitchThresholdMs = 25.0
+
+    struct FrameStats {
+        var arrived = 0
+        var decoded = 0
+        var sourceHitches = 0
+        var displayHitches = 0
+        var worstGapMs = 0
+    }
+
+    /// Stats since the last call, which this resets.
+    func drainFrameStats() -> FrameStats {
+        lock.withLock {
+            defer {
+                _framesIn = 0; _framesDecoded = 0
+                _sourceHitches = 0; _displayHitches = 0; _worstGapMs = 0
+            }
+            return FrameStats(
+                arrived: _framesIn, decoded: _framesDecoded,
+                sourceHitches: _sourceHitches, displayHitches: _displayHitches,
+                worstGapMs: _worstGapMs
+            )
+        }
+    }
+
     init() {
         decoder.onCaptureTimestamp = { [weak self] captureMs in
             guard let self else { return }
             let nowMs = Date().timeIntervalSince1970 * 1000
+            self.lock.withLock { self._pendingCaptureMs = captureMs }
             self.onVideoLatency?(nowMs - Double(captureMs))
         }
         decoder.onFrameGap = { [weak self] in
@@ -43,8 +87,23 @@ final class VideoPipeline: @unchecked Sendable {
         }
         decoder.onSampleBuffer = { [weak self] sampleBuffer in
             guard let self else { return }
+            let nowMs = Date().timeIntervalSince1970 * 1000
             self.lock.lock()
             let view = self._displayView
+            self._framesDecoded += 1
+
+            let capture = self._pendingCaptureMs
+            if self._lastShownMs > 0 {
+                let gap = nowMs - self._lastShownMs
+                if gap > Self.hitchThresholdMs { self._displayHitches += 1 }
+                self._worstGapMs = max(self._worstGapMs, Int(gap.rounded()))
+            }
+            if self._lastCaptureMs > 0, capture > self._lastCaptureMs,
+               Double(capture - self._lastCaptureMs) > Self.hitchThresholdMs {
+                self._sourceHitches += 1
+            }
+            self._lastShownMs = nowMs
+            self._lastCaptureMs = capture
             self.lock.unlock()
             view?.enqueue(sampleBuffer)
         }
@@ -70,6 +129,7 @@ final class VideoPipeline: @unchecked Sendable {
             // breaks decoding until the next GOP.
             let isCritical = data.first.map { $0 != 3 } ?? true
             lock.lock()
+            _framesIn += 1
             let backlogged = _queuedPackets >= Self.maxQueuedPackets
             if backlogged && !isCritical {
                 lock.unlock()
