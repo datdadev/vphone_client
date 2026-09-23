@@ -1,0 +1,4 @@
+[submodule "host/vphone-cli"]
+	path = host/vphone-cli
+	url = https://github.com/datdadev/vphone-cli.git
+	branch = vphone-remote

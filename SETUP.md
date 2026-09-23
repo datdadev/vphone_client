@@ -24,9 +24,14 @@ sign the iOS app.
 
 The video streaming, native-resolution capture and live touch injection all live
 in the fork under [`host/vphone-cli/`](host/) — stock `vphone-cli` won't work.
-That directory isn't part of this repo (it's a separate git checkout so the diff
-against upstream stays clean); see [`host/README.md`](host/README.md) for how to
-get it before continuing.
+It's a git submodule, not plain files in this repo; if you didn't clone with
+`--recurse-submodules`, fetch it now:
+
+```bash
+git submodule update --init --recursive
+```
+
+See [`host/README.md`](host/README.md) for details.
 
 If you don't already have a VM, create one first (one-time, downloads and patches
 an iOS firmware — see upstream's
