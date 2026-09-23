@@ -26,9 +26,26 @@ export const HEADER_BYTES = 23;
 export const FRAGMENT_PAYLOAD = 1100;
 /** One parity fragment per this many data fragments (~10% overhead). */
 export const FEC_GROUP_SIZE = 10;
+/** Smaller groups, so ~25% overhead, for frames worth protecting harder. */
+export const FEC_GROUP_SIZE_CRITICAL = 4;
 
 export const FrameType = { parameterSets: 1, keyFrame: 2, deltaFrame: 3 } as const;
 export type FrameTypeValue = (typeof FrameType)[keyof typeof FrameType];
+
+/**
+ * Losing a delta frame costs one glitched frame; losing a keyframe or the
+ * parameter sets freezes the picture until a replacement round-trips from the
+ * host. Keyframes are also the biggest frames, so they span the most groups
+ * and are the likeliest to take two hits in one -- exactly what single-parity
+ * XOR can't fix. Protecting them harder costs little: they're roughly one
+ * frame in sixty, so the extra parity is a couple of percent of the stream.
+ *
+ * Derived from the frame type rather than signalled, so the receiver computes
+ * the same value from the header it already reads. No protocol change.
+ */
+export function fecGroupSize(frameType: FrameTypeValue): number {
+  return frameType === FrameType.deltaFrame ? FEC_GROUP_SIZE : FEC_GROUP_SIZE_CRITICAL;
+}
 
 export interface PacketHeader {
   frameSeq: number;
@@ -78,6 +95,7 @@ export function fragmentFrame(
   captureMs: number
 ): Buffer[] {
   const fragCount = Math.max(1, Math.ceil(frame.length / FRAGMENT_PAYLOAD));
+  const groupSize = fecGroupSize(frameType);
   const datagrams: Buffer[] = [];
 
   for (let index = 0; index < fragCount; index++) {
@@ -87,7 +105,7 @@ export function fragmentFrame(
         frameSeq,
         fragIndex: index,
         fragCount,
-        groupIndex: Math.floor(index / FEC_GROUP_SIZE),
+        groupIndex: Math.floor(index / groupSize),
         isParity: false,
         frameType,
         frameLen: frame.length,
@@ -100,10 +118,10 @@ export function fragmentFrame(
     datagrams.push(packet);
   }
 
-  const groupCount = Math.ceil(fragCount / FEC_GROUP_SIZE);
+  const groupCount = Math.ceil(fragCount / groupSize);
   for (let group = 0; group < groupCount; group++) {
-    const first = group * FEC_GROUP_SIZE;
-    const last = Math.min(first + FEC_GROUP_SIZE, fragCount);
+    const first = group * groupSize;
+    const last = Math.min(first + groupSize, fragCount);
     // A one-fragment group has nothing to protect it with: parity would just
     // duplicate the fragment, which costs as much as sending it twice.
     if (last - first < 2) continue;

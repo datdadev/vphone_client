@@ -1,5 +1,5 @@
 import {
-  fragmentFrame, readHeader, FrameType, HEADER_BYTES, FRAGMENT_PAYLOAD, FEC_GROUP_SIZE,
+  fragmentFrame, readHeader, FrameType, HEADER_BYTES, FRAGMENT_PAYLOAD, fecGroupSize,
 } from "./videoPackets.js";
 
 /** Mirrors the client reassembler, so FEC recovery is tested by actually losing packets. */
@@ -18,11 +18,13 @@ function reassemble(packets: Buffer[]): Buffer | null {
   }
   if (!meta) return null;
 
-  // Recover any group missing exactly one data fragment.
-  const groups = Math.ceil(meta.fragCount / FEC_GROUP_SIZE);
+  // Recover any group missing exactly one data fragment. Group size comes from
+  // the frame type, exactly as the real client derives it.
+  const groupSize = fecGroupSize(meta.frameType);
+  const groups = Math.ceil(meta.fragCount / groupSize);
   for (let g = 0; g < groups; g++) {
-    const first = g * FEC_GROUP_SIZE;
-    const last = Math.min(first + FEC_GROUP_SIZE, meta.fragCount);
+    const first = g * groupSize;
+    const last = Math.min(first + groupSize, meta.fragCount);
     const missing: number[] = [];
     for (let i = first; i < last; i++) if (!data.has(i)) missing.push(i);
     if (missing.length !== 1) continue;
@@ -49,16 +51,25 @@ const packets = fragmentFrame(frame, 42, FrameType.keyFrame, 1234567890);
 const dataCount = packets.filter((p) => !readHeader(p)!.isParity).length;
 const parityCount = packets.length - dataCount;
 
-console.log(`frame ${frame.length}B -> ${dataCount} data + ${parityCount} parity`);
-console.log("overhead:", ((parityCount / dataCount) * 100).toFixed(1) + "%");
+console.log(`keyframe ${frame.length}B -> ${dataCount} data + ${parityCount} parity`);
+console.log("keyframe overhead:", ((parityCount / dataCount) * 100).toFixed(1) + "%", "(expect ~25%)");
+
+// The same bytes sent as a delta frame must use the cheaper group size.
+const asDelta = fragmentFrame(frame, 43, FrameType.deltaFrame, 1234567890);
+const deltaParity = asDelta.filter((p) => readHeader(p)!.isParity).length;
+console.log(
+  "delta overhead:", ((deltaParity / dataCount) * 100).toFixed(1) + "%", "(expect ~10%)"
+);
+console.log("delta round-trips:", reassemble(asDelta)?.equals(frame));
 
 const intact = reassemble(packets);
 console.log("lossless reassembly:", intact?.equals(frame));
 
 // Drop one data fragment per group: FEC should recover all of them.
+const keyGroupSize = fecGroupSize(FrameType.keyFrame);
 const oneEach = packets.filter((p) => {
   const h = readHeader(p)!;
-  return h.isParity || h.fragIndex % FEC_GROUP_SIZE !== 3;
+  return h.isParity || h.fragIndex % keyGroupSize !== keyGroupSize - 1;
 });
 console.log(
   `dropped ${packets.length - oneEach.length} fragments (1 per group), recovered:`,

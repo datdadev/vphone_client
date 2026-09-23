@@ -1,7 +1,7 @@
 import dgram from "node:dgram";
 import WebSocket from "ws";
 import { readFileSync } from "node:fs";
-import { readHeader, HEADER_BYTES, FEC_GROUP_SIZE } from "./videoPackets.js";
+import { readHeader, HEADER_BYTES, fecGroupSize, type FrameTypeValue } from "./videoPackets.js";
 
 const token = JSON.parse(readFileSync(process.env.HOME + "/.vphone-bridge/config.json", "utf8")).token;
 const sessionId = "loss-" + Date.now();
@@ -20,9 +20,10 @@ setInterval(() => {
   for (const [seq, p] of frames) {
     if (now - p.at < 250) continue;
     // try FEC before giving up
-    const groups = Math.ceil(p.count / FEC_GROUP_SIZE);
+    const size = fecGroupSize(p.type as FrameTypeValue);
+    const groups = Math.ceil(p.count / size);
     for (let g = 0; g < groups; g++) {
-      const first = g * FEC_GROUP_SIZE, last = Math.min(first + FEC_GROUP_SIZE, p.count);
+      const first = g * size, last = Math.min(first + size, p.count);
       const missing = []; for (let i = first; i < last; i++) if (!p.frags.has(i)) missing.push(i);
       if (missing.length === 1 && p.parity.has(g)) repaired++;
     }

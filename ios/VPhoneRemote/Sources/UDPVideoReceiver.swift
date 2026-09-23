@@ -16,6 +16,17 @@ final class UDPVideoReceiver {
     private static let headerBytes = 23
     private static let fragmentPayload = 1100
     private static let fecGroupSize = 10
+    private static let fecGroupSizeCritical = 4
+    private static let deltaFrameType: UInt8 = 3
+
+    /// Mirrors `fecGroupSize` in the bridge's videoPackets.ts: keyframes and
+    /// parameter sets are sent with smaller groups, so they carry more parity.
+    /// Both sides derive it from the frame type in the header -- if this ever
+    /// disagrees with the sender, groups misalign and repair silently stops
+    /// working, so the two must change together.
+    private static func groupSize(forFrameType frameType: UInt8) -> Int {
+        frameType == deltaFrameType ? fecGroupSize : fecGroupSizeCritical
+    }
     /// Frames older than this are never going to complete; holding them just
     /// grows memory and delays the keyframe request that actually fixes things.
     private static let frameTimeout: TimeInterval = 0.25
@@ -168,15 +179,27 @@ final class UDPVideoReceiver {
         }
         frames.removeValue(forKey: frameSeq)
         lastCompleted = frameSeq
+
+        // Older frames still pending are already dead: `handle` drops anything
+        // at or below `lastCompleted`, so their missing fragments can never be
+        // accepted even if they show up. Leaving them for `expireStaleFrames`
+        // only delays the keyframe request that unfreezes the picture -- by the
+        // 250ms timeout plus up to a second of waiting for that timer to tick.
+        // Reporting it here costs nothing and makes recovery immediate.
+        let abandoned = frames.keys.filter { $0 < frameSeq }
+        for seq in abandoned { frames.removeValue(forKey: seq) }
+
         onFrame?(pending.frameType, pending.captureMs, frameSeq, frame.prefix(pending.frameLen))
+        if !abandoned.isEmpty { onUnrecoverableLoss?() }
     }
 
     /// XOR parity recovers exactly one missing fragment per group.
     private func repairGroups(_ pending: inout PendingFrame) {
-        let groupCount = Int((Double(pending.fragCount) / Double(Self.fecGroupSize)).rounded(.up))
+        let size = Self.groupSize(forFrameType: pending.frameType)
+        let groupCount = Int((Double(pending.fragCount) / Double(size)).rounded(.up))
         for group in 0..<groupCount {
-            let first = group * Self.fecGroupSize
-            let last = min(first + Self.fecGroupSize, pending.fragCount)
+            let first = group * size
+            let last = min(first + size, pending.fragCount)
             let missing = (first..<last).filter { pending.fragments[$0] == nil }
             guard missing.count == 1, let parity = pending.parity[group] else { continue }
 
