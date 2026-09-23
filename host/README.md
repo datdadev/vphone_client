@@ -11,7 +11,7 @@ on top of upstream.
 Clone this repo with `--recurse-submodules` to get it automatically:
 
 ```bash
-git clone --recurse-submodules https://github.com/datdadev/vphone_client.git
+git clone --recurse-submodules https://github.com/datdadev/vphone-client.git
 ```
 
 Already cloned without that flag? Fetch it after the fact:
